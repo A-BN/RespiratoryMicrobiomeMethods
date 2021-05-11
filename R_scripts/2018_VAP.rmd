@@ -1,0 +1,726 @@
+---
+title: "2018 VAP methodo"
+output:
+  html_notebook: default
+  pdf_document:
+     fig_crop: no
+---
+
+packages loading 
+```{r setup, echo = FALSE,message = FALSE}
+knitr::opts_knit$set(root.dir = "../../")
+knitr::opts_knit$set(root.dir = "abn_data/2018_PAVM/")
+# knitr::opts_chunk$set(dpi = 300) #, fig.width = 16, fig.height = 10)
+used_pckgs <- c("readr", "dplyr", "tidyr", "stringr","ggplot2", "cowplot")
+
+my_packages <- function(packages, install_packages = FALSE){
+  used_pckgs <- packages
+  for (packus in used_pckgs) {
+    packus <- as.character(packus)
+    pckg_present <- 
+      require(packus, 
+              character.only = TRUE, 
+              quietly = TRUE)
+    if (pckg_present) {
+      library(packus, 
+              character.only = TRUE)
+    } 
+    else {
+      print(paste0("Package: ",packus, " not found"))
+      if (install_packages) install.packages(packus)
+    }
+  }
+}
+
+my_packages(packages = used_pckgs, install_packages = FALSE)
+theme_set(theme_cowplot())
+figures_out <- "../../output/plots/"
+```
+
+# Metadata loading and first transformations
+```{r meta_loading}
+sample_renaming <- function(x){
+  str_replace(string = x, 
+              pattern = "(.*)(.{1})$", 
+              replacement = "\\2\\1")
+}
+metadata <- meta_path <- "../../data/sample_metadata.tsv" 
+
+meta <- 
+  read_tsv(file = meta_path, comment = "#")
+samples_out <- c("N13BOM", "R15", "R16", "N22TPBC", "R21TPB","R22TPBC", "N21TPB", "N1", "N2", "N15", "N16")
+samples_out <- c("N13BOM", "R13BOM", "R15", "R16", "N22TPBC","R22TPBC", "N15", "N16")
+
+meta %>% 
+  mutate(RT = if_else(condition = (URT == 1), 
+                      true = "upper", 
+                      false = "lower")) %>% 
+  mutate(time = if_else(condition = (time == 1), 
+                      true = "D-Before", 
+                      false = "D-VAP")) %>%
+  mutate(ctrl = case_when(
+    ctrl == 0 ~ "sample_POS",
+    ctrl == 1 ~ "sample_NEG",
+    ctrl == 2 ~ "ctrl_NEG",
+    ctrl == 3 ~ "ctrl_POS")) %>% 
+  mutate(sample = sample_renaming(sample)) %>% 
+  # mutate(patient = str_replace(string = sample, 
+  #                              pattern = "[NR]{1}[0-9]+([A-Z]+)", 
+  #                              replacement = "\\1")) %>%
+  mutate(PAVM = if_else(condition = (PAVM == 1),
+                        true = TRUE,
+                        false = FALSE)) %>%
+  # filter(!(sample %in% samples_out)) %>% 
+  select(-URT, -LRT) -> meta
+```
+
+# Alpha diversity
+## Alpha diversity rarefaction tables
+```{r}
+N_rare_nobs <- read_delim("../../data/N_pavm_alpha_1000/N_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.0.03.filter.groups.rarefaction", 
+    "\t", escape_double = FALSE, trim_ws = TRUE)
+N_rare_shannon <- read_delim("../../data/N_pavm_alpha_1000/N_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.0.03.filter.groups.r_shannon", "\t", escape_double = FALSE, trim_ws = TRUE)
+
+R_rare_nobs <- read_delim("../../data/R_pavm_alpha_1000/R_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.0.03.filter.groups.rarefaction", 
+    "\t", escape_double = FALSE, trim_ws = TRUE)
+
+R_rare_shannon <- read_delim("../../data/R_pavm_alpha_1000/R_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.0.03.filter.groups.r_shannon", "\t", escape_double = FALSE, trim_ws = TRUE)
+
+parse_rare_df <- function(rare_df) {
+  rare_df %>%
+    select_at(.vars = vars(-contains("hci-"), -contains("lci-"))) %>% 
+    gather(key = sample, value = alpha, -numsampled) %>% 
+    mutate(sample = sample_renaming(str_replace(string = sample, pattern = "^0.03-(.*)$", replacement = "\\1"))) %>%
+    identity()
+}
+
+N_rare_nobs <- parse_rare_df(rare_df = N_rare_nobs)
+N_rare_shannon <- parse_rare_df(rare_df = N_rare_shannon)
+
+R_rare_nobs <- parse_rare_df(rare_df = R_rare_nobs)
+R_rare_shannon <- parse_rare_df(rare_df = R_rare_shannon)
+
+# rare_simpson <- parse_rare_df(rare_df = rare_simpson)
+# rare_chao <- parse_rare_df(rare_df = rare_chao)
+# rare_ace <- parse_rare_df(rare_df = rare_ace)
+```
+
+## Plotting alpha rarefaction curves
+```{r}
+rare_curve <-
+  function(rare_df, log = FALSE, y = "alpha", title = ""){
+    rare_curve <-
+      rare_df %>% 
+      # mutate(log = log) %>% 
+      # mutate(numsampled = ifelse(test = log, yes = log10(numsampled), no = numsampled )) %>%
+      ggplot() +
+      geom_line(mapping = aes(x = numsampled, 
+                              y = alpha, 
+                              group = sample)) +
+      xlab(label = "Reads sampled") +
+      ylab(label = y) +
+      ggtitle(title)
+    
+    if (log == TRUE) {
+      rare_curve +
+         scale_x_log10(
+                      breaks = scales::trans_breaks("log10", function(x) 10^x),
+                      labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+          annotation_logticks(sides = "b") -> rare_curve
+    } else {
+      # rare_curve +
+      #    -> rare_curve
+    }
+    return(rare_curve)  
+  }
+
+plot_grid(
+  rare_curve(rare_df = N_rare_nobs, log = FALSE, y = "OTU count", title = "S-V4"),
+  rare_curve(rare_df = N_rare_shannon, log = TRUE, y = "Shannon's H'", title = "S-V4"),
+  rare_curve(rare_df = R_rare_nobs, log = FALSE, y = "OTU count", title = "R-V4"),
+  rare_curve(rare_df = R_rare_shannon, log = TRUE, y = "Shannon's H'", title = "R-V4"),
+  nrow = 2, ncol = 2,
+  labels = "AUTO") -> figure_1
+
+figure_1
+save_plot(filename = paste0(figures_out,"figure_1.pdf"), plot = figure_1, base_width = 10, base_height = 7)
+save_plot(filename = paste0(figures_out, "figure_1.tiff"), 
+          plot = figure_1, 
+          base_width = 19.05, 
+          base_height = 13.335, 
+          unit = 'cm',
+          dpi = 300)
+```
+## Choose the rarefaction threshold
+```{r}
+N_rare_nobs %>% 
+  filter(!is.na(alpha)) %>% 
+  group_by(sample) %>% 
+  summarize(n_reads = max(numsampled)) %>% 
+  arrange(desc(n_reads))
+
+rare_thre <- 5e3
+```
+The rarefaction threshold chosen is 5e3, it eliminates the negative controls and
+allow us to keep all the samples. 
+
+
+
+## Plotting alpha diversity evolution
+
+First a simple barplot to compare Shannon's H and the number of observed OTUs
+```{r, fig.height=8}
+
+N_rare_shannon$primer <- "S-V4"
+R_rare_shannon$primer <- "R-V4"
+
+N_rare_shannon %>%
+  bind_rows(R_rare_shannon) %>%
+  filter(! str_detect(string = sample, pattern = "22TPBC")) %>% 
+  group_by(sample) %>% 
+  filter(numsampled == rare_thre) %>% 
+  ungroup() %>% 
+  left_join(y = meta, by = c("sample" = "sample")) %>%
+  filter(! patient %in% c("C1", "NC4")) %>% 
+  mutate(patient = if_else(is.na(patient), sample, patient)) %>%
+  mutate(time = if_else(condition = patient == "PC1", true = "", false = time)) %>%
+  mutate(RT = if_else(condition = patient == "PC1", true = "", false = RT)) %>% 
+  mutate(name = paste(patient, time, RT)) %>% 
+  identity() -> shannon_for_plot
+
+
+ggplot(data = shannon_for_plot, mapping = aes(x = alpha, y = name, group = primer, fill = primer)) +
+geom_col(position = position_dodge(preserve = "single")) +
+scale_fill_viridis_d(begin = 0.8, end = 0.2) +
+# facet_grid(~primer, scales = "free_x") +
+xlab("Shannon's H\nRarefaction at 5e3 reads") +
+ylab("") +
+theme(axis.text.y = element_text(hjust = 0)) +
+geom_blank() -> figure_supp_1
+  
+figure_supp_1
+save_plot(filename = paste0(figures_out,"figure_supp_1.pdf"), plot = figure_supp_1, base_width = 8, base_height = 7)
+
+save_plot(filename = paste0(figures_out, "figure_supp_1.tiff"), 
+          plot = figure_supp_1, 
+          base_width = 19.05, 
+          base_height = 16.6,
+          unit = 'cm',
+          dpi = 300)
+```
+
+On a scatterplot:
+
+Shannon:
+```{r, fig.height=8}
+shannon_for_plot %>% 
+  pivot_wider(names_from = "primer", values_from = "alpha", values_fill = 0) %>% 
+  group_by(patient, RT, time) %>% 
+  mutate(`S-V4` = max(`S-V4`, na.rm = T)) %>% 
+  mutate(`R-V4` = max(`R-V4`, na.rm = T)) %>%
+  slice(1) %>%
+  identity() -> shannon_for_plot_2
+  
+ggplot(data = shannon_for_plot_2) +
+    xlim(c(0, 4)) +
+    ylim(c(0, 4)) +
+  geom_abline(slope = 1, intercept = 0, alpha = 0.3) +
+    geom_point(mapping = aes(y = `S-V4`, x = `R-V4`, colour = time, shape = RT), size = 2.5) +
+    ggrepel::geom_label_repel(mapping = aes(y = `S-V4`, x = `R-V4`, label = patient, colour = time)) +
+    scale_x_continuous(expand=expansion(mult=c(0.01,0.1))) +
+    scale_y_continuous(expand=expansion(mult=c(0.01,0.1))) +
+    scale_shape(breaks = c("upper", "lower"), name = "RT") +
+    scale_color_discrete(breaks = c("D-Before", "D-VAP")) +
+    ggtitle("Shannon's H") -> shannon_dot
+
+shannon_dot
+# save_plot(filename = paste0(figures_out,"figure_supp_N.pdf"), plot = shannon_dot, base_width = 8, base_height = 7)
+```
+
+nOTU: 
+```{r, fig.height=8}
+N_rare_nobs$primer <- "S-V4"
+R_rare_nobs$primer <- "R-V4"
+
+N_rare_nobs %>%
+  bind_rows(R_rare_nobs) %>%
+  filter(! str_detect(string = sample, pattern = "22TPBC")) %>% 
+  group_by(sample) %>% 
+  filter(numsampled == rare_thre) %>% 
+  ungroup() %>% 
+  left_join(y = meta, by = c("sample" = "sample")) %>%
+  filter(! patient %in% c("C1", "NC4")) %>% 
+  mutate(patient = if_else(is.na(patient), sample, patient)) %>%
+  mutate(time = if_else(condition = patient == "PC1", true = "", false = time)) %>%
+  mutate(RT = if_else(condition = patient == "PC1", true = "", false = RT)) %>% 
+  mutate(name = paste(patient, time, RT)) %>% 
+  identity() -> nobs_for_plot
+
+nobs_for_plot %>% 
+  pivot_wider(names_from = "primer", values_from = "alpha", values_fill = 0) %>% 
+  group_by(patient, RT, time) %>% 
+  mutate(`S-V4` = max(`S-V4`, na.rm = T)) %>% 
+  mutate(`R-V4` = max(`R-V4`, na.rm = T)) %>%
+  slice(1) %>%
+  identity() -> nobs_for_plot_2
+  
+ggplot(data = nobs_for_plot_2) +
+  geom_abline(slope = 1, intercept = 0, alpha = 0.3) +
+    geom_point(mapping = aes(y = `S-V4`, x = `R-V4`, colour = time, shape = RT), size = 2.5) +
+    ggrepel::geom_label_repel(mapping = aes(y = `S-V4`, x = `R-V4`, label = patient, colour = time)) +
+    scale_x_continuous(expand=expansion(mult=c(0.01,0.1))) +
+    scale_y_continuous(expand=expansion(mult=c(0.01,0.1))) +
+    scale_shape(breaks = c("upper", "lower"), name = "RT") +
+    scale_color_discrete(breaks = c("D-Before", "D-VAP")) +
+    ggtitle("OTU count") -> nobs_dot
+
+nobs_dot
+
+save_plot(filename = paste0(figures_out, "figure_supp_3.tiff"), 
+          plot = nobs_dot, 
+          base_width = 19.05, 
+          base_height = 12,
+          unit = 'cm',
+          dpi = 300)
+```
+
+
+
+We will now do the parallel plot to compare alpha diversity of the samples.
+```{r}
+make_alpha_df <- function(rare_df, tresh){
+  rare_df %>% 
+    group_by(sample) %>%
+    filter(numsampled == tresh) %>%
+    filter(!is.na(alpha)) %>%
+    select(-numsampled) %>% 
+    ungroup() %>% 
+    identity() -> rare_df
+  meta %>%
+    inner_join(rare_df, by = "sample") %>% 
+    filter(! sample %in% samples_out) %>% 
+    identity -> rare_df
+  return(rare_df)
+}
+
+plot_my_alpha <- function(alpha_df, y_lab){
+  plot_patient <-
+    alpha_df %>% 
+    filter(patient != "PC1") %>%
+    filter(ctrl == "sample_POS") %>% 
+    ggplot(aes(x = RT, y = alpha, color = patient, group = patient)) +
+    geom_line() +  
+    geom_point(size = 5) +
+    ylab(label = y_lab) +
+    xlab(label = "Respiratory tract") +
+    scale_colour_manual(values = RColorBrewer::brewer.pal(n = 9, "Set1")[1:4]) +
+    labs(color = "") +
+    facet_wrap(~time)
+  
+  plot_control <-
+    alpha_df %>% 
+    filter(patient != "PC1") %>%
+    filter(ctrl == "sample_NEG") %>% 
+    ggplot(aes(x = RT, y = alpha, color = patient, group = patient)) +
+    geom_line() +    
+    geom_point(size = 5) +
+    ylab(label = y_lab) +
+    xlab(label = "Respiratory tract") +
+    scale_colour_manual(values = RColorBrewer::brewer.pal(n = 8, "Dark2")[c(3, 4, 7, 8)]) +
+    labs(color = "") +
+    theme(aspect.ratio = 1.5) +
+    facet_wrap(~time)
+  
+  return(list(plot_patient, plot_control))
+}
+
+plot_my_alpha(alpha_df = make_alpha_df(rare_df = N_rare_shannon, tresh = rare_thre), y_lab = "Shannon's H'") -> figure_5
+
+figure_5a <- figure_5[[2]] 
+figure_5b <- figure_5[[1]]
+plot_grid(figure_5a, figure_5b, ncol = 2, labels = "AUTO", rel_widths = c(1,1.5)) -> figure_5
+
+figure_5
+
+save_plot(filename = paste0(figures_out,"figure_5.pdf"), plot = figure_5, base_width = 10)
+
+save_plot(filename = paste0(figures_out, "figure_5.tiff"), 
+          plot = figure_5, 
+          base_width = 16.8, 
+          base_height = 10, 
+          unit = 'cm',
+          dpi = 300)
+
+
+```
+
+Primer comparison for alpha diversity
+```{r}
+N_rare_shannon %>% 
+  bind_rows(R_rare_shannon) %>% 
+  filter(numsampled == rare_thre) %>%
+  mutate(sample = str_replace(string = sample, pattern = "^[RN]", replacement = "")) %>% 
+  filter(str_detect(string = sample, pattern = "(BOM)|(DEM)|(BOI)")) -> shannon_comp_for_plot
+  
+  ggplot(data = shannon_comp_for_plot, mapping = aes(x = primer, y = alpha, color = sample, group = sample)) +
+    geom_point(size = 5, shape = 1) +
+    ggrepel::geom_label_repel(data = shannon_comp_for_plot[shannon_comp_for_plot$primer == "human", ], 
+                              aes(x = primer, y = alpha, label = sample), nudge_x = 2, segment.alpha = 0.1) +
+    geom_line() +
+    geom_blank()
+
+```
+
+
+# Beta diversity
+## Beta diversity pairwise column loading
+```{r}
+load_beta <- function(beta_path, metadata = meta){
+beta_df <- 
+  read_delim(beta_path, 
+    "\t", escape_double = FALSE, col_names = c("sample_1", "sample_2", "dist"), 
+    trim_ws = TRUE)
+beta_df %>%
+  mutate_at(.vars = c("sample_1", "sample_2"), .funs = sample_renaming) %>% 
+  left_join(y = meta, by = c("sample_1" = "sample")) %>% 
+  mutate(PAVM_1 = PAVM, RT_1 = RT, ctrl_1 = ctrl, patient_1 = patient) %>% 
+  mutate(PAVM = NULL, time = NULL, RT = NULL, patient = NULL, ctrl = NULL) %>% 
+  left_join(y = meta, by = c("sample_2" = "sample")) %>% 
+  mutate(PAVM_2 = PAVM, RT_2 = RT, ctrl_2 = ctrl, patient_2 = patient) %>% 
+  mutate(PAVM = NULL, time = NULL, RT = NULL, patient = NULL, ctrl = NULL) %>%
+  filter(!(sample_1 %in% samples_out) & !(sample_2 %in% samples_out)) %>% 
+  filter(ctrl_1 == ctrl_2 & PAVM_1 == PAVM_2 & RT_1 == RT_2) %>% 
+  mutate(status = paste(ctrl_1, PAVM_1, sep = "_")) %>%
+  mutate(status = case_when(status == "sample_NEG_FALSE" ~ "Control",
+                            status == "sample_POS_FALSE" ~ "D-Before",
+                            status == "sample_POS_TRUE" ~ "D-VAP")) %>%
+  identity() -> beta_meta
+  return(beta_meta)
+}
+
+plot_beta <- function(beta_df, y_lab = "") {
+  ggplot(data = beta_df) +
+    geom_boxplot(mapping = aes(x = status, y = dist)) +
+    ylab(y_lab) +
+    xlab("") +
+    facet_wrap(~ RT_1)
+    
+}
+  
+bray_path <- "../../data/N_pavm_beta_1000/N_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.braycurtis.0.03.column.dist"
+thetayc_path <- "../../data/N_pavm_beta_1000/N_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.thetayc.0.03.column.dist"
+wUnifrac_path <- "../../data/N_pavm_beta_1000/N_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.0.03.rep.tre1.weighted.column.dist"
+unUnifrac_path <- "../../data/N_pavm_beta_1000/N_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.0.03.rep.tre1.unweighted.column.dist"
+
+plot_beta(beta_df = load_beta(beta_path = bray_path), y_lab = "Bray-Curtis distance")
+plot_beta(beta_df = load_beta(beta_path = thetayc_path), y_lab = "Yue Clayton theta")
+plot_beta(beta_df = load_beta(beta_path = wUnifrac_path), y_lab = "weighted Unifrac") -> figure_6
+figure_6
+plot_beta(beta_df = load_beta(beta_path = unUnifrac_path), y_lab = "unweighted Unifrac")
+
+save_plot(filename = paste0(figures_out,"figure_6.pdf"), plot = figure_6, base_width = 7)
+
+save_plot(filename = paste0(figures_out, "figure_6.tiff"), 
+          plot = figure_6, 
+          base_width = 16.8, 
+          base_height = 10,
+          unit = 'cm',
+          dpi = 300)
+```
+
+# Taxonomic assignations
+Loading OTU table and taxonomic table and join them
+```{r}
+assign_to_shared <- 
+  function(shared_path, tax_path){
+    
+    shared <- read_delim(shared_path, 
+                         "\t", escape_double = FALSE, trim_ws = TRUE)
+    tax <- read_delim(tax_path, 
+                      "\t", escape_double = FALSE, trim_ws = TRUE)
+    
+    shared <-
+      shared %>%
+      select(-label, -numOtus) %>%
+      gather(key = OTU, value = count, -Group) %>%
+      identity()
+
+    tax <-
+      tax %>%
+      select(-Size) %>%
+      mutate(Taxonomy = str_replace_all(pattern = "\\([0-9]+\\)", replacement = "", string = Taxonomy)) %>%
+      # separate(col = Taxonomy, sep = ";", into = paste0("lvl", 1:6)) %>%
+      separate(col = Taxonomy, sep = ";", into = c("Domain", "Phylum", "Class", "Order", "Family", "Genus")) %>%
+      identity()
+
+    cat("\nNumber of 'unclassified' by taxonomic rank: \n\t")
+    tax %>%
+      select(-OTU) %>%
+      sapply(FUN = function(x) sum(str_detect(string = x, pattern = "unclassified"))) %>%
+      cat("\n")
+
+    shared <-
+      left_join(x = shared, y = tax, by = "OTU") %>%
+      rename(otu_count = count) %>%
+      group_by(Group) %>%
+      mutate(group_count = sum(otu_count)) %>%
+      ungroup() %>%
+      identity()
+    
+    return(shared)
+  }
+taxo_path <- "../../data/N_pavm_assign/N_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.0.03.cons.taxonomy"
+N_shared_path <- "../../data/N_pavm_mat_cluster_otu/N_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.shared"
+N_shared_tax <-
+  assign_to_shared(shared_path = N_shared_path, tax_path = taxo_path)
+taxo_path <- "../../data/R_pavm_assign/R_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.0.03.cons.taxonomy"
+R_shared_path <- "../../data/R_pavm_mat_cluster_otu/R_pavm_.trim.contigs.good.unique.good.filter.precluster.pick.pick.opti_mcc.shared"
+R_shared_tax <-
+  assign_to_shared(shared_path = R_shared_path, tax_path = taxo_path)
+
+```
+
+
+
+```{r}
+make_taxo_prop <- 
+  function(shared_tax, tax_level, min_perc){
+    taxo_level <- quo(!!as.name(tax_level))
+    shared_tax %>%
+      filter(otu_count > 0) %>% 
+      select(Group, OTU, otu_count, group_count, !! (taxo_level)) %>%
+      mutate(Group = sample_renaming(Group)) %>% 
+      group_by(!!(taxo_level), Group) %>%
+      mutate(taxo_count = sum(otu_count)) %>%
+      mutate(taxo_prop_group = taxo_count / group_count) %>%
+      slice(1) %>% 
+      filter(taxo_prop_group > min_perc) %>%
+      select(-otu_count) %>% 
+      ungroup() %>%
+      group_by(Group) %>%
+      arrange(desc(taxo_prop_group)) %>%
+      mutate(cum_prop = cumsum(taxo_prop_group)) %>%
+      do(add_row(.data = .)) %>%
+      ungroup() %>%
+      mutate_at(.vars = c("Group", "group_count"),
+                .funs = function(x) if_else(condition = is.na(x),
+                                            true = lag(x),
+                                            false = x)) %>%
+      mutate_at(.vars = c("OTU", as_label(taxo_level)),
+                .funs = function(x) if_else(condition = is.na(x),
+                                            true = "Other",
+                                            false = x)) %>%
+      group_by(Group) %>%
+      mutate(taxo_count = if_else(condition = is.na(taxo_count),
+                                  true = max(group_count) - sum(taxo_count, na.rm = TRUE),
+                                  false = taxo_count)) %>%
+      mutate(taxo_prop_group = taxo_count / group_count) %>%
+      mutate(cum_prop = if_else(condition = is.na(cum_prop),
+                                true = lag(cum_prop) + taxo_prop_group,
+                                false = cum_prop)) %>%
+      ungroup() %>%
+      left_join(y = meta, by = c("Group" = "sample")) %>%
+      filter(ctrl != "ctrl_NEG") %>%
+      group_by(patient) %>%
+      ungroup() %>%
+      # mutate(patient = as.factor(patient)) %>%
+      mutate(id = paste(patient, time, RT, sep = "_")) %>%
+      identity() -> shared_taxo_prop
+    return(shared_taxo_prop)
+  }
+
+taxon_level <- "Family"
+min_prop <- 7/100
+N_tax_prop <- 
+  make_taxo_prop(shared_tax = N_shared_tax, tax_level = taxon_level, min_perc = min_prop)
+R_tax_prop <- 
+  make_taxo_prop(shared_tax = R_shared_tax, tax_level = taxon_level, min_perc = min_prop)
+
+# Make table without grouping into other
+N_tax_prop_full <-
+  make_taxo_prop(shared_tax = N_shared_tax, tax_level = taxon_level, min_perc = 0)
+R_tax_prop_full <-
+  make_taxo_prop(shared_tax = R_shared_tax, tax_level = taxon_level, min_perc = 0)
+
+N_tax_prop_full$primer <- "S-V4"
+R_tax_prop_full$primer <- "R-V4"
+
+N_tax_prop_full %>% 
+  bind_rows(R_tax_prop_full) %>%
+  filter(Family != "Other") %>% 
+  select(primer, patient, RT, time, family = Family, count = taxo_count, proportion = taxo_prop_group, cum_prop) %>% 
+  identity() -> tax_full
+
+write_tsv(x = tax_full, path = "../../output/tables/supp_table_prop.tsv")
+```
+
+Taxa / color coherence
+```{r}
+# Get a list of all the taxons present to define a common colorscale.
+# taxa <- 
+colour_df <- 
+  N_tax_prop %>%     
+  bind_rows(R_tax_prop) %>% 
+  select(!!(taxon_level), taxo_count) %>%
+  group_by(Family) %>%
+  summarise(n = sum(taxo_count)) %>%
+  ungroup() %>%
+  arrange(desc(n)) 
+
+tot_coloura <- nrow(colour_df)
+from_pal_2 <- tot_coloura - 12
+
+colour_df <-
+  colour_df %>%
+  bind_cols(colour = c(RColorBrewer::brewer.pal(n = 12, "Set3"), RColorBrewer::brewer.pal(n = from_pal_2, "Dark2"))) %>%
+  select(-n) %>%
+  identity()
+
+taxo_colour <- colour_df$colour
+names(taxo_colour) <- unlist(colour_df[ ,taxon_level])
+# N_tax_prop %>%
+#   left_join(color_df, by = taxon_level) -> N_tax_prop
+```
+
+Plotting time
+```{r, fig.width=12}
+plot_abund <- function(.data, title = "") {  
+  ggplot(data = .data) +
+  geom_bar(mapping = aes(x = RT, 
+                         y = taxo_prop_group, 
+                         fill = Family ), stat = "identity") +
+  scale_fill_manual(values = taxo_colour) +
+  xlab("Respiratory tract") +
+  ylab("Relative abundance") +
+  ggtitle(title) +
+  guides(fill = guide_legend(title = taxon_level)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.text = element_text(face = "italic")) +
+  facet_grid(cols = vars(patient), scales = "free")
+}
+
+N_tax_prop %>%   
+  filter(ctrl == "sample_NEG", patient != "C1") %>%
+  identity() %>% 
+  plot_abund(title = "S-V4\nControls") -> ctrl_S
+
+R_tax_prop %>%   
+  filter(ctrl == "sample_NEG", patient != "C1") %>%
+  identity() %>% 
+  plot_abund(title = "R-V4\nControls") -> ctrl_R
+
+
+N_tax_prop %>%   
+  filter(ctrl == "sample_POS" & time == "D-Before", ! Group %in% samples_out) %>%
+  identity() %>% 
+  plot_abund(title = "S-V4\nD-Before") -> before_S
+
+N_tax_prop %>%   
+  filter(ctrl == "sample_POS" & time == "D-VAP", ! Group %in% samples_out) %>%
+  identity() %>% 
+  plot_abund(title = "S-V4\nD-VAP") -> vap_S
+
+R_tax_prop %>%   
+  filter(ctrl == "sample_POS" & time == "D-Before", ! Group %in% samples_out) %>%
+  identity() %>% 
+  plot_abund(title = "R-V4\nD-Before") -> before_R
+
+R_tax_prop %>%   
+  filter(ctrl == "sample_POS" & time == "D-VAP", ! Group %in% samples_out) %>%
+  identity() %>% 
+  plot_abund(title = "R-V4\nD-VAP") -> vap_R
+
+
+
+
+plot_grid(ctrl_S, ctrl_R,
+          nrow = 1, 
+          labels = "AUTO") -> figure_3
+plot_grid(before_S, before_R, vap_S, vap_R,
+          nrow = 2,
+          labels = "AUTO") -> figure_4
+figure_3
+figure_4
+
+save_plot(filename = paste0(figures_out,"figure_3.pdf"), plot = figure_3, base_width = 12, base_height = 7)
+save_plot(filename = paste0(figures_out, "figure_3.tiff"),
+          plot = figure_3,
+          base_width = 19.05,
+          base_height = 7,
+          unit = 'cm',
+          dpi = 300)
+
+save_plot(filename = paste0(figures_out,"figure_4.pdf"), plot = figure_4, base_width = 12, base_height = 7)
+
+save_plot(filename = paste0(figures_out, "figure_4.tiff"), 
+          plot = figure_4, 
+          base_width = 17, 
+          base_height = 10,
+          unit = 'cm',
+          dpi = 300)
+
+```
+
+```{r}
+taxon_level_ctrl <- "Genus"
+min_prop_ctrl <- 1/100
+N_tax_prop_ctrl <- 
+  make_taxo_prop(shared_tax = N_shared_tax, 
+                 tax_level = taxon_level_ctrl, 
+                 min_perc = min_prop_ctrl) %>% 
+  filter(ctrl == "ctrl_POS")
+R_tax_prop_ctrl <- 
+  make_taxo_prop(shared_tax = R_shared_tax, 
+                 tax_level = taxon_level_ctrl, 
+                 min_perc = min_prop_ctrl) %>% 
+  filter(ctrl == "ctrl_POS")
+
+N_tax_prop_ctrl %>%
+  mutate(primer = "S-V4") %>% 
+  bind_rows(R_tax_prop_ctrl) %>% 
+  mutate(primer = if_else(condition = is.na(primer), true = "R-V4", false = primer)) %>% 
+  mutate(primer = factor(primer, levels = c("S-V4", "R-V4"))) %>%
+  mutate(Genus = forcats::fct_relevel(Genus, "Other", after = Inf)) %>% 
+  filter(patient == "PC1") %>%
+  identity() -> mock_prop
+
+  ggplot(data = mock_prop) +
+  geom_col(mapping = aes(x = primer, 
+                         y = taxo_prop_group, 
+                         fill = !!sym(taxon_level_ctrl))) +
+  # scale_fill_brewer(palette = "Set1") +
+  scale_fill_viridis_d() +
+  xlab("Primer") +
+  ylab("Relative abundance") +
+  ggtitle("") +
+  guides(fill = guide_legend(title = taxon_level_ctrl)) -> figure_2
+
+figure_2
+
+save_plot(filename = paste0(figures_out, "figure_2.pdf"), plot = figure_2, base_height = 5, base_width = 5)
+save_plot(filename = paste0(figures_out, "figure_2.tiff"), 
+          plot = figure_2, 
+          base_width = 15, 
+          base_height = 10, 
+          unit = 'cm',
+          dpi = 300)
+```
+
+For Octaveplot:
+
+```{r eval=FALSE, include=FALSE}
+N_shared_tax %>% 
+  select(OTU, Group, otu_count) %>% 
+  spread(key = Group, value = otu_count) %>% 
+  rename("#OTU ID" = OTU) -> N_otutab
+
+N_otutab %>% 
+  slice(1:2) -> N_otutab_mini
+
+# write_tsv(x = N_otutab_mini[,1:3], path = "./data/N_pavm_mat_cluster_otu/N_pavm.otutab")
+  
+```
+
+```{r}
+devtools::session_info()
+```
+
